@@ -29,11 +29,11 @@ export function LocationAutocomplete({
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<google.maps.places.AutocompletePrediction[]>([]);
   const [q, setQ] = useState(value);
-
   const [origin, setOrigin] = useState<{ lat: number; lng: number } | null>(null);
 
+  // Get user location (for distance + bias)
   useEffect(() => {
     if (!("geolocation" in navigator)) return;
     navigator.geolocation.getCurrentPosition(
@@ -46,20 +46,23 @@ export function LocationAutocomplete({
     );
   }, []);
 
+  // Debounce text input into q
   const debounceRef = useRef<number | null>(null);
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => setQ(value.trim()), 250);
+    debounceRef.current = window.setTimeout(() => setQ(value.trim()), 250) as unknown as number;
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
     };
   }, [value]);
 
+  // Autocomplete session
   const sessionRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
   useEffect(() => {
     sessionRef.current = new google.maps.places.AutocompleteSessionToken();
   }, []);
 
+  // Fetch predictions
   useEffect(() => {
     let cancelled = false;
 
@@ -71,13 +74,14 @@ export function LocationAutocomplete({
         return;
       }
 
+      // Ensure Places API is loaded
       // @ts-ignore
       await google.maps.importLibrary?.("places");
       setLoading(true);
 
       const service = new google.maps.places.AutocompleteService();
 
-      const opts: any = {
+      const opts: google.maps.places.AutocompletionRequest = {
         input: s,
         sessionToken: sessionRef.current ?? undefined,
       };
@@ -85,33 +89,44 @@ export function LocationAutocomplete({
       if (origin) {
         const center = new google.maps.LatLng(origin.lat, origin.lng);
         opts.locationBias = new google.maps.Circle({ center, radius: 50000 });
-        opts.origin = center;
+        (opts as any).origin = center; // origin is not in public TS types but allowed at runtime
       }
 
-      service.getPlacePredictions(opts, (preds: any[], status: any) => {
-        if (cancelled) return;
+      service.getPlacePredictions(
+        opts,
+        (
+          preds: google.maps.places.AutocompletePrediction[] | null,
+          status: google.maps.places.PlacesServiceStatus
+        ) => {
+          if (cancelled) return;
 
-        if (status === google.maps.places.PlacesServiceStatus.OK && Array.isArray(preds)) {
-          let list = preds;
-          const dmKey =
-            preds?.[0]?.distance_meters !== undefined
+          if (status === google.maps.places.PlacesServiceStatus.OK && Array.isArray(preds)) {
+            let list = preds;
+
+            // Only documented key is distance_meters
+            const hasDistanceMeters =
+              typeof preds[0]?.distance_meters === "number";
+
+            const dmKey: "distance_meters" | null = hasDistanceMeters
               ? "distance_meters"
-              : preds?.[0]?.distanceMeters !== undefined
-              ? "distanceMeters"
               : null;
 
-          if (origin && dmKey) {
-            list = [...preds].sort(
-              (a: any, b: any) => (a[dmKey] ?? Infinity) - (b[dmKey] ?? Infinity)
-            );
+            if (origin && dmKey) {
+              list = [...preds].sort((a, b) => {
+                const av = (a as any)[dmKey] ?? Infinity;
+                const bv = (b as any)[dmKey] ?? Infinity;
+                return av - bv;
+              });
+            }
+
+            setResults(list);
+          } else {
+            setResults([]);
           }
 
-          setResults(list);
-        } else {
-          setResults([]);
+          setLoading(false);
         }
-        setLoading(false);
-      });
+      );
     })();
 
     return () => {
@@ -119,8 +134,12 @@ export function LocationAutocomplete({
     };
   }, [q, origin]);
 
-  const pick = (pred: any) => {
-    const placeId = pred.place_id || pred.placeId || pred?.placePrediction?.placeId;
+  const pick = (pred: google.maps.places.AutocompletePrediction) => {
+    const placeId =
+      pred.place_id ||
+      (pred as any).placeId ||
+      (pred as any)?.placePrediction?.placeId;
+
     if (!placeId) return;
 
     const el = document.createElement("div");
@@ -129,7 +148,13 @@ export function LocationAutocomplete({
     ps.getDetails(
       {
         placeId,
-        fields: ["place_id", "name", "formatted_address", "geometry", "business_status"],
+        fields: [
+          "place_id",
+          "name",
+          "formatted_address",
+          "geometry",
+          "business_status",
+        ],
         sessionToken: sessionRef.current ?? undefined,
       },
       (d, status) => {
@@ -169,13 +194,15 @@ export function LocationAutocomplete({
 
       {open && (
         <div className="absolute z-50 mt-2 w-full bg-white border border-gray-200 rounded-xl shadow-lg max-h-72 overflow-auto">
-          {loading && <div className="px-4 py-3 text-sm text-gray-500">Searching…</div>}
+          {loading && (
+            <div className="px-4 py-3 text-sm text-gray-500">Searching…</div>
+          )}
           {!loading && results.length === 0 && (
             <div className="px-4 py-3 text-sm text-gray-500">No matches</div>
           )}
 
-          {results.map((p: any) => {
-            const dm = (p.distance_meters ?? p.distanceMeters) as number | undefined;
+          {results.map((p) => {
+            const dm = (p as any).distance_meters as number | undefined;
             return (
               <button
                 key={p.place_id}
@@ -184,11 +211,17 @@ export function LocationAutocomplete({
                 className="w-full text-left px-4 py-3 hover:bg-gray-50"
               >
                 <div className="text-sm font-medium text-gray-900 flex items-center space-x-1">
-                  <span>{p.structured_formatting?.main_text || p.description}</span>
+                  <span>
+                    {p.structured_formatting?.main_text || p.description}
+                  </span>
                   {dm != null && (
                     <>
-                      <span className="text-gray-400 relative top-[1px]">•</span>
-                      <span className="text-[11px] text-gray-500">{formatDistance(dm)}</span>
+                      <span className="text-gray-400 relative top-[1px]">
+                        •
+                      </span>
+                      <span className="text-[11px] text-gray-500">
+                        {formatDistance(dm)}
+                      </span>
                     </>
                   )}
                 </div>
@@ -199,11 +232,11 @@ export function LocationAutocomplete({
             );
           })}
 
-          <div className="px-4 py-2 text-[10px] text-gray-400 border-t">Powered by Google</div>
+          <div className="px-4 py-2 text-[10px] text-gray-400 border-t">
+            Powered by Google
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-export type { PickedPlace };

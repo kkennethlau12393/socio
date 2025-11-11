@@ -3,5 +3,9 @@
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
-  ]
+  ],
+    "compilerOptions": {
+    // ...whatever you already have
+    "types": ["vite/client", "google.maps"]
+  }
 }

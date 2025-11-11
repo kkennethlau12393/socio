@@ -159,7 +159,7 @@ export const MyEventsTab = ({ onEventClick, onExploreEvents, onEventChat }: MyEv
               p_limit: 3
             });
 
-          const attendeeAvatars = avatarData?.map(a => a.avatar_url) || [];
+          const attendeeAvatars = avatarData?.map((a: { avatar_url: string | null }) => a.avatar_url) || [];
 
           return {
             id: event.id,

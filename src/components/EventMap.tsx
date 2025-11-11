@@ -335,7 +335,7 @@ export function EventMap({ onEventClick, onBack }: EventMapProps) {
     });
 
     if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, { padding: 80 });
+      map.fitBounds(bounds, 80);
       google.maps.event.addListenerOnce(map, "idle", () => {
         if ((map.getZoom() || 0) > 16) map.setZoom(16);
       });

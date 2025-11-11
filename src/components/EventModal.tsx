@@ -51,16 +51,22 @@ export const EventModal = ({ event, onClose, onJoined }: EventModalProps) => {
 
   const fetchAttendeeAvatars = async () => {
     try {
-      const { data: avatarData } = await supabase
-        .rpc('get_event_attendee_avatars', {
-          p_event_id: event.id,
-          p_limit: 3
-        });
+      const { data: avatarData } = await supabase.rpc('get_event_attendee_avatars', {
+        p_event_id: event.id,
+        p_limit: 3,
+      });
 
-      const avatars = avatarData?.map(a => ({
-        userId: a.user_id,
-        avatar: a.avatar_url
-      })) || [];
+      type AvatarRow = {
+        user_id: string;
+        avatar_url: string | null;
+      };
+
+      const avatars =
+        (avatarData as AvatarRow[] | null)?.map((a) => ({
+          userId: a.user_id,
+          avatar: a.avatar_url,
+        })) || [];
+
       setAttendeeAvatars(avatars);
     } catch (error) {
       console.error('Error fetching attendee avatars:', error);

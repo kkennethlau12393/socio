@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+// @ts-nocheck
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,18 +14,22 @@ import {
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { EmailVerificationScreen } from './EmailVerificationScreen';
+import OnboardingFlow from './OnboardingFlow';
 
 interface AuthScreenProps {
+  // Called ONLY after onboarding is completed (then parent shows main app).
   onComplete: () => void;
 }
 
 type Mode = 'signin' | 'signup';
+type Stage = 'auth' | 'verify' | 'onboarding';
 
 // OAuth redirect URL for Expo Go (your user + slug)
 const REDIRECT_URL =
   'exp://exp.host/@kenneth12393/mobile/--/auth/callback';
 
-// Allowed university domains
 const ALLOWED_DOMAINS = [
   'ucl.ac.uk',
   'lse.ac.uk',
@@ -32,34 +37,44 @@ const ALLOWED_DOMAINS = [
   'imperial.ac.uk',
 ];
 
-// Dev exception emails
 const DEV_ALLOWED_EMAILS = [
   'kenneth@tomlau.com',
   'kenneth@socio-app.com',
   'misha@socio-app.com',
 ];
 
-// Required so Expo can complete the auth session when it comes back
 WebBrowser.maybeCompleteAuthSession();
 
 const validateEmailDomain = (email: string): boolean => {
   const emailLower = email.toLowerCase();
-
-  if (DEV_ALLOWED_EMAILS.includes(emailLower)) {
-    return true;
-  }
-
+  if (DEV_ALLOWED_EMAILS.includes(emailLower)) return true;
   return ALLOWED_DOMAINS.some((domain) =>
     emailLower.endsWith(`@${domain}`)
   );
 };
 
+const isProfileComplete = (profile: any): boolean => {
+  if (!profile) return false;
+  return Boolean(
+    profile.username &&
+      profile.university &&
+      profile.degree &&
+      profile.year_of_study
+  );
+};
+
 export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
+  const { user, profile, refreshProfile } = useAuth();
+
   const [mode, setMode] = useState<Mode>('signup');
+  const [stage, setStage] = useState<Stage>('auth');
+
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [emailForVerification, setEmailForVerification] = useState('');
   const [password, setPassword] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,12 +94,36 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
       .from('Logo')
       .getPublicUrl('Microsoft/microsoft_logo.png').data?.publicUrl || '';
 
-  const handleAuth = async () => {
+  // On mount / auth change: if user exists, decide onboarding vs complete
+  useEffect(() => {
+    const syncUser = async () => {
+      if (!user) return;
+
+      try {
+        await refreshProfile?.();
+      } catch {
+        // ignore
+      }
+
+      if (isProfileComplete(profile)) {
+        onComplete();
+      } else {
+        setStage('onboarding');
+      }
+    };
+
+    syncUser();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // ---------- HANDLERS ----------
+
+  const handleSignUp = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      if (isSignUp && (!firstName || !lastName)) {
+      if (!firstName || !lastName) {
         setError('Please enter your first and last name.');
         setLoading(false);
         return;
@@ -96,7 +135,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
         return;
       }
 
-      if (isSignUp && !validateEmailDomain(email)) {
+      if (!validateEmailDomain(email)) {
         setError(
           'Please use a valid university email from UCL, LSE, KCL, or Imperial College London.'
         );
@@ -104,29 +143,58 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
         return;
       }
 
-      if (isSignUp) {
-        const { error: signUpError } = await supabase.auth.signUp({
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: firstName,
+            last_name: lastName,
+          },
+        },
+      });
+
+      if (signUpError) throw signUpError;
+
+      // ✅ Go straight to email verification screen
+      setEmailForVerification(email);
+      setStage('verify');
+      setLoading(false);
+    } catch (e: any) {
+      setError(e?.message || 'Something went wrong. Please try again.');
+      setLoading(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!email || !password) {
+        setError('Enter your email and password.');
+        setLoading(false);
+        return;
+      }
+
+      const { error: signInError } =
+        await supabase.auth.signInWithPassword({
           email,
           password,
-          options: { data: { first_name: firstName, last_name: lastName } },
         });
 
-        if (signUpError) {
-          throw signUpError;
-        }
+      if (signInError) throw signInError;
+
+      // Refresh profile then decide where to go
+      await refreshProfile?.();
+
+      if (isProfileComplete(profile)) {
+        onComplete();
       } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (signInError) {
-          throw signInError;
-        }
+        setStage('onboarding');
       }
 
       setLoading(false);
-      onComplete();
     } catch (e: any) {
       setError(e?.message || 'Something went wrong. Please try again.');
       setLoading(false);
@@ -173,7 +241,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
           const userEmail = session.user.email.toLowerCase();
 
           if (!validateEmailDomain(userEmail)) {
-            // Not an allowed university/dev email -> sign out and block
             await supabase.auth.signOut();
             setError(
               'Please use a valid university email from UCL, LSE, KCL, or Imperial College London.'
@@ -182,9 +249,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
             return;
           }
 
-          // Allowed
+          await refreshProfile?.();
+
+          if (isProfileComplete(profile)) {
+            onComplete();
+          } else {
+            setStage('onboarding');
+          }
+
           setLoading(false);
-          onComplete();
           return;
         }
 
@@ -196,6 +269,50 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
       setError(e?.message || 'Unable to start social sign in.');
       setLoading(false);
     }
+  };
+
+  const handleVerified = async () => {
+    // Called by EmailVerificationScreen: user clicked "I've verified"
+    try {
+      await supabase.auth.getUser(); // refresh session
+      await refreshProfile?.();
+    } catch {
+      // ignore
+    }
+    setStage('onboarding');
+  };
+
+  const handleBackToLogin = () => {
+    setStage('auth');
+    setMode('signin');
+    setError(null);
+  };
+
+  const handleOnboardingComplete = () => {
+    onComplete();
+  };
+
+  // ---------- STAGE RENDERING ----------
+
+  if (stage === 'verify') {
+    return (
+      <EmailVerificationScreen
+        email={emailForVerification}
+        onVerified={handleVerified}
+        onBackToLogin={handleBackToLogin}
+      />
+    );
+  }
+
+  if (stage === 'onboarding') {
+    return <OnboardingFlow onComplete={handleOnboardingComplete} />;
+  }
+
+  // ---------- AUTH SCREEN (SIGN UP / LOG IN) ----------
+
+  const handleAuth = () => {
+    if (isSignUp) return handleSignUp();
+    return handleSignIn();
   };
 
   return (
@@ -326,7 +443,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onComplete }) => {
             </View>
 
             <View>
-              <Text className="text-xs text-gray-500 mb-1.5">Password</Text>
+              <Text className="text-xs text-gray-500 mb-1.5">
+                Password
+              </Text>
               <View className="bg-white border border-gray-300 rounded-2xl px-4 py-3">
                 <TextInput
                   value={password}

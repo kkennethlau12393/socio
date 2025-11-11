@@ -57,7 +57,20 @@ interface Notification {
   follower_details?: FollowerDetails;
 }
 
-const HEADER_TOP = 67; // manually adjust header height (matches CreateEvent feel)
+const HEADER_TOP = 67;
+
+// Anonymous avatar used ONLY for follower notifications when they have no avatar_url
+const DEFAULT_FOLLOWER_AVATAR_URL = (() => {
+  try {
+    const { data } = supabase
+      .storage
+      .from('Profile') // bucket: profile
+      .getPublicUrl('anonymous/cover.jpg'); // file path
+    return data?.publicUrl || '';
+  } catch {
+    return '';
+  }
+})();
 
 export const NotificationCenter: React.FC<NotificationCenterProps> = ({
   onClose,
@@ -75,7 +88,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
   const translateX = useRef(new Animated.Value(40)).current;
   const scrollRef = useRef<ScrollView | null>(null);
 
-  // Slide in on mount
+  // Animate in
   useEffect(() => {
     Animated.timing(translateX, {
       toValue: 0,
@@ -105,14 +118,14 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         () => {
           fetchNotifications();
           onNotificationChange?.();
-        },
+        }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks-exhaustive-deps
   }, [user?.id]);
 
   const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -133,7 +146,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
       if (error) throw error;
       onNotificationChange?.();
     } catch (err) {
-      console.error('Error marking notifications as read:', err);
+      console.error('Error marking all notifications as read:', err);
     }
   };
 
@@ -151,9 +164,9 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
       const enriched: Notification[] = await Promise.all(
         (data || []).map(async (notif: any): Promise<Notification> => {
-          // JOIN REQUEST NOTIFICATION
+          // Join request details
           if (notif.type === 'join_request' && notif.request_id) {
-            const { data: requestData, error: requestError } = await supabase
+            const { data: requestData, error: reqError } = await supabase
               .from('event_join_requests')
               .select(
                 `
@@ -172,12 +185,12 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
                   first_name,
                   last_name
                 )
-              `,
+              `
               )
               .eq('id', notif.request_id)
               .maybeSingle();
 
-            if (!requestError && requestData) {
+            if (!reqError && requestData) {
               const events = (requestData as any).events;
               const profiles = (requestData as any).profiles;
 
@@ -204,7 +217,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
             }
           }
 
-          // NEW FOLLOWER NOTIFICATION
+          // New follower details: use related_id to fetch profile
           if (notif.type === 'new_follower' && notif.related_id) {
             const { data: followerData, error: followerError } = await supabase
               .from('profiles')
@@ -225,9 +238,8 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
             }
           }
 
-          // FALLBACK
           return notif as Notification;
-        }),
+        })
       );
 
       setNotifications(enriched);
@@ -244,15 +256,12 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
       const { error } = await supabase
         .from('event_join_requests')
-        .update({
-          status: 'accepted',
-          updated_at: new Date().toISOString(),
-        })
+        .update({ status: 'accepted', updated_at: new Date().toISOString() })
         .eq('id', requestId);
 
       if (error) throw error;
 
-      setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+      setNotifications(prev => prev.filter(n => n.id !== notificationId));
       onNotificationChange?.();
     } catch (err) {
       console.error('Error accepting request:', err);
@@ -267,15 +276,12 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
 
       const { error } = await supabase
         .from('event_join_requests')
-        .update({
-          status: 'declined',
-          updated_at: new Date().toISOString(),
-        })
+        .update({ status: 'declined', updated_at: new Date().toISOString() })
         .eq('id', requestId);
 
       if (error) throw error;
 
-      setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+      setNotifications(prev => prev.filter(n => n.id !== notificationId));
       onNotificationChange?.();
     } catch (err) {
       console.error('Error declining request:', err);
@@ -312,10 +318,23 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     return `${days}d ago`;
   };
 
+  // Join requests: generic fallback (no anonymous Supabase asset)
+  const getJoinRequestAvatar = (maybeUrl?: string | null) => {
+    if (maybeUrl && maybeUrl.length > 0) return maybeUrl;
+    return 'https://api.dicebear.com/7.x/thumbs/svg?seed=join-request';
+  };
+
+  // Followers: use avatar if present, otherwise Supabase anonymous asset
+  const getFollowerAvatar = (maybeUrl?: string | null) => {
+    if (maybeUrl && maybeUrl.length > 0) return maybeUrl;
+    if (DEFAULT_FOLLOWER_AVATAR_URL) return DEFAULT_FOLLOWER_AVATAR_URL;
+    return 'https://api.dicebear.com/7.x/thumbs/svg?seed=anonymous';
+  };
+
   const renderJoinRequest = (notification: Notification) => {
     if (!notification.request_details) return null;
-
     const request = notification.request_details;
+
     const start = new Date(request.event_start_time);
     const eventTimeString = start.toLocaleString('en-US', {
       weekday: 'short',
@@ -359,11 +378,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
               className="flex-row items-center"
             >
               <Image
-                source={{
-                  uri:
-                    request.user_avatar ||
-                    'https://api.dicebear.com/7.x/thumbs/svg?seed=user',
-                }}
+                source={{ uri: getJoinRequestAvatar(request.user_avatar) }}
                 className="w-9 h-9 rounded-full mr-2"
               />
               <View>
@@ -423,28 +438,46 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
   };
 
   const renderFollower = (notification: Notification) => {
-    if (!notification.follower_details) return null;
+    // We now ALWAYS render follower-style for type=new_follower,
+    // even if follower_details is missing.
     const f = notification.follower_details;
+
+    const nameFromDetails =
+      (f?.first_name || '') + (f?.last_name ? ` ${f.last_name}` : '');
+    const cleanedName = nameFromDetails.trim();
+
+    // Fallback: derive name from message like "X started following you"
+    let nameFromMessage: string | null = null;
+    if (!cleanedName && notification.message) {
+      const msg = notification.message;
+      const suffix = ' started following you';
+      if (msg.endsWith(suffix)) {
+        nameFromMessage = msg.replace(suffix, '').trim();
+      }
+    }
+
+    const displayName =
+      cleanedName || nameFromMessage || f?.username || 'Someone';
+
+    const avatarUri = getFollowerAvatar(f?.avatar_url);
 
     return (
       <Pressable
         key={notification.id}
-        onPress={() => setSelectedUserId(f.id)}
+        onPress={() => {
+          if (f?.id) setSelectedUserId(f.id);
+        }}
         className="bg-white rounded-2xl p-4 border border-gray-100 mb-3 flex-row"
       >
         <Image
-          source={{
-            uri:
-              f.avatar_url ||
-              'https://api.dicebear.com/7.x/thumbs/svg?seed=follower',
-          }}
+          source={{ uri: avatarUri }}
           className="w-11 h-11 rounded-full mr-3"
         />
         <View className="flex-1">
           <View className="flex-row justify-between items-start mb-1">
             <View>
               <Text className="text-sm font-semibold text-slate-900">
-                {f.first_name} {f.last_name}
+                {displayName}
               </Text>
               <Text className="text-xs text-slate-600">
                 started following you
@@ -503,7 +536,8 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
     if (n.type === 'join_request' && n.request_details) {
       return renderJoinRequest(n);
     }
-    if (n.type === 'new_follower' && n.follower_details) {
+    if (n.type === 'new_follower') {
+      // ⚡ always use follower-style UI for new_follower
       return renderFollower(n);
     }
     return renderGeneric(n);
@@ -516,7 +550,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         { transform: [{ translateX }] },
       ]}
     >
-      {/* Header – same vibe as CreateEvent, soft border */}
+      {/* Header */}
       <View
         className={`px-6 pb-3 border-b flex-row items-center justify-between ${
           isScrolled

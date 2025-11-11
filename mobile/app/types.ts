@@ -41,4 +41,5 @@ export interface Group {
   nextEvent?: string;
 }
 
+
 export type TabType = 'discover' | 'map' | 'communities' | 'events' | 'profile';

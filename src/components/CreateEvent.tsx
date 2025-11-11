@@ -370,8 +370,7 @@ export const CreateEvent = ({ onBack, onEventCreated }: CreateEventProps) => {
                   onSelect={(p) => {
                     setLocationInput(p.formatted_address);
                     setSelectedPlace(p);
-                  }}
-                  country="GB|HK"
+                  }}                  
                   placeholder="Search a place and pick from list"
                 />
                 
